@@ -120,6 +120,7 @@ class DataCollatorWithPadding:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors="pt",
         )
+        batch = features
         if "label" in batch:
             batch["labels"] = batch["label"]
             del batch["label"]

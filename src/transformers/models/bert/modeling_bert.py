@@ -200,6 +200,8 @@ class BertEmbeddings(nn.Module):
             inputs_embeds = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
+        print(inputs_embeds.shape)
+        print(token_type_embeddings.shape)
         embeddings = inputs_embeds + token_type_embeddings
         if self.position_embedding_type == "absolute":
             position_embeddings = self.position_embeddings(position_ids)
@@ -1350,8 +1352,7 @@ class BertForMaskedLM(BertPreTrainedModel):
 
 
 @add_start_docstrings(
-    """Bert Model with a `next sentence prediction (classification)` head on top. """,
-    BERT_START_DOCSTRING,
+    """Bert Model with a `next sentence prediction (classification)` head on top. """, BERT_START_DOCSTRING,
 )
 class BertForNextSentencePrediction(BertPreTrainedModel):
     def __init__(self, config):
@@ -1459,9 +1460,13 @@ class BertForSequenceClassification(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.bert = BertModel(config)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.ct_bert = BertModel(config)
+        self.lt_bert = BertModel(config)
+        self.ld_bert = BertModel(config)
+        self.ct_dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.lt_dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.ld_dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size * 3, config.num_labels)
 
         self.init_weights()
 
@@ -1474,8 +1479,15 @@ class BertForSequenceClassification(BertPreTrainedModel):
     )
     def forward(
         self,
-        input_ids=None,
-        attention_mask=None,
+        CoverageType_input_ids=None,
+        CoverageType_attention_mask=None,
+        CoverageType_token_type_ids=None,
+        LossType_input_ids=None,
+        LossType_attention_mask=None,
+        LossType_token_type_ids=None,
+        LossDesc_input_ids=None,
+        LossDesc_attention_mask=None,
+        LossDesc_token_type_ids=None,
         token_type_ids=None,
         position_ids=None,
         head_mask=None,
@@ -1493,10 +1505,10 @@ class BertForSequenceClassification(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
+        CoverageType_outputs = self.ct_bert(
+            input_ids=CoverageType_input_ids,
+            attention_mask=CoverageType_attention_mask,
+            token_type_ids=CoverageType_token_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
@@ -1505,10 +1517,42 @@ class BertForSequenceClassification(BertPreTrainedModel):
             return_dict=return_dict,
         )
 
-        pooled_output = outputs[1]
+        LossType_outputs = self.lt_bert(
+            input_ids=LossType_input_ids,
+            attention_mask=LossType_attention_mask,
+            token_type_ids=LossType_token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
 
-        pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output)
+        LossDesc_outputs = self.ld_bert(
+            input_ids=LossDesc_input_ids,
+            attention_mask=LossDesc_attention_mask,
+            token_type_ids=LossDesc_token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        ct_output = CoverageType_outputs[1]
+        ct_pooled_output = self.ct_dropout(ct_output)
+
+        lt_output = LossType_outputs[1]
+        lt_pooled_output = self.lt_dropout(lt_output)
+
+        ld_output = LossDesc_outputs[1]
+        ld_pooled_output = self.lt_dropout(ld_output)
+
+        # concatenate pooled outputs then classifier layer?
+        cat_pooled_output = torch.cat((ct_pooled_output, lt_pooled_output, ld_pooled_output), 1)
+        logits = self.classifier(cat_pooled_output)
 
         loss = None
         if labels is not None:
@@ -1520,15 +1564,14 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
+        # for now...
+        outputs = CoverageType_outputs
         if not return_dict:
             output = (logits,) + outputs[2:]
             return ((loss,) + output) if loss is not None else output
 
         return SequenceClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            loss=loss, logits=logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions,
         )
 
 
@@ -1616,10 +1659,7 @@ class BertForMultipleChoice(BertPreTrainedModel):
             return ((loss,) + output) if loss is not None else output
 
         return MultipleChoiceModelOutput(
-            loss=loss,
-            logits=reshaped_logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            loss=loss, logits=reshaped_logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions,
         )
 
 
@@ -1707,10 +1747,7 @@ class BertForTokenClassification(BertPreTrainedModel):
             return ((loss,) + output) if loss is not None else output
 
         return TokenClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            loss=loss, logits=logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions,
         )
 
 

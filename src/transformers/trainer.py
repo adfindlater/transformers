@@ -246,7 +246,7 @@ class Trainer:
         else:
             self.is_model_parallel = False
 
-        default_collator = default_data_collator if tokenizer is None else DataCollatorWithPadding(tokenizer)
+        default_collator = default_data_collator if tokenizer is None else DataCollatorWithPadding(tokenizer, padding=True)
         self.data_collator = data_collator if data_collator is not None else default_collator
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
